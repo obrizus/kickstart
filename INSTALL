@@ -1,0 +1,72 @@
+#!/bin/bash
+source toolbox.sh || exit 1
+
+KERNEL_VERSION="3.10.2"
+KERNEL="bzImage-${KERNEL_VERSION}"
+
+BUSYBOX_VERSION="1.21.1"
+BUSYBOX="busybox"
+
+ROOTFS="initramfs"
+
+# Look for compiled Linux kernel
+if [ -e ${STAGING_DIR}/${KERNEL} ]; then
+  echo "Using existing kernel!"
+else
+  remove ${STAGING_DIR}/${KERNEL}
+  fetch https://www.kernel.org/pub/linux/kernel/v3.x/linux-${KERNEL_VERSION}.tar.xz
+  config linux-${KERNEL_VERSION} defconfig
+  build linux-${KERNEL_VERSION}
+  copy ${BUILD_DIR}/linux-${KERNEL_VERSION}/arch/x86/boot/bzImage ${STAGING_DIR}/${KERNEL}
+fi
+
+# Look for compiled Busybox
+if [ -e ${STAGING_DIR}/${BUSYBOX} ]; then
+  echo "Using existing Busybox!"
+else
+  remove ${STAGING}/${BUSYBOX}
+  fetch http://busybox.net/downloads/busybox-${BUSYBOX_VERSION}.tar.bz2
+  config busybox-${BUSYBOX_VERSION} defconfig
+  export LDFLAGS="--static"
+  build busybox-${BUSYBOX_VERSION} install
+  copy ${BUILD_DIR}/busybox-${BUSYBOX_VERSION}/_install ${STAGING_DIR}/${BUSYBOX}
+fi
+
+# Build root file system
+message "Preparing file system"
+folder ${TARGET_DIR}
+copy ${STAGING_DIR}/${BUSYBOX}/. ${TARGET_DIR}
+try chmod +s ${TARGET_DIR}/bin/busybox
+
+try cd ${TARGET_DIR}
+folder dev proc sys tmp
+remove linuxrc
+
+# Create init script
+cat > init << INIT_SCRIPT
+#!/bin/ash
+mount -t proc none /proc
+mount -t sysfs none /sys
+/bin/ash
+INIT_SCRIPT
+try chmod +x init
+
+# Wrap file system
+remove ${IMAGES_DIR}
+folder ${IMAGES_DIR}
+copy ${STAGING_DIR}/${KERNEL} ${IMAGES_DIR}
+fakeroot sh -s << FAKEROOT_SCRIPT
+mknod dev/console c 5 1
+find . | cpio -o -H newc 2>> ${LOGFILE} | gzip > ${IMAGES_DIR}/${ROOTFS}.cpio.gz
+FAKEROOT_SCRIPT
+
+try cd ${WORK_DIR}
+
+message "All done!"
+
+# Test images
+run ${IMAGES_DIR}/${KERNEL} ${IMAGES_DIR}/${ROOTFS}.cpio.gz
+
+# Install USB disk
+#TODO
+
